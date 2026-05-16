@@ -64,6 +64,45 @@ Common examples:
 ```bash
 # create the database
 python manage.py man_db create
+		## Specifying the database name
+
+		The management commands read database connection information from your Django project's `settings.DATABASES`. The important field for create/backup/restore actions is the `NAME` value under the database alias.
+
+		Example `settings.py` (using environment variables is recommended for secrets):
+
+		```py
+		import os
+
+		DATABASES = {
+			"default": {
+				"ENGINE": "django.db.backends.postgresql",
+				"NAME": os.environ.get("DB_NAME", "my_database_name"),
+				"USER": os.environ.get("DB_USER", "app_user"),
+				"PASSWORD": os.environ.get("DB_PASSWORD", "secret"),
+				"HOST": os.environ.get("DB_HOST", "db.example"),
+				"PORT": int(os.environ.get("DB_PORT", 5432)),
+			},
+			"analytics": {
+				"ENGINE": "django.db.backends.postgresql",
+				"NAME": "analytics_db",
+				"USER": "analytics_user",
+				"PASSWORD": "secret",
+				"HOST": "db.example",
+				"PORT": 5432,
+			},
+		}
+		```
+
+		How the commands select the database:
+
+		- Use the `--database` option to select a Django database *alias* (default: `default`). The command reads the `NAME` from that alias.
+		- Example: `python manage.py man_db create --database analytics` will attempt to create the database named by `DATABASES['analytics']['NAME']`.
+
+		Important notes:
+
+		- The `create` action requires a non-empty `NAME`. If `DATABASES[alias]['NAME']` is empty the command will raise a `CommandError` and refuse to proceed.
+		- For `restore`, you may use `--create-db` to tell `pg_restore` to create the database from the archive; when `--create-db` is used the command allows an empty `NAME` because the archive can provide the database name.
+		- Keep credentials out of source by using `os.environ.get(...)` or a secrets manager in your `settings.py`.
 
 # check connectivity for a named DB alias
 python manage.py man_db ping --database reporting

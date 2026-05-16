@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+import os
+from unittest.mock import patch
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "tests.settings")
+
+import django
+from django.core.management import call_command
+from django.test import SimpleTestCase
+
+django.setup()
+
+
+class CommandTests(SimpleTestCase):
+    def test_man_db_command_dispatches_to_action_handler(self) -> None:
+        with patch("man_db.management.commands.man_db.perform_action") as perform_action:
+            call_command("man_db", "ping", database="analytics")
+
+        perform_action.assert_called_once()
+        action, options, *_ = perform_action.call_args.args
+        self.assertEqual(action, "ping")
+        self.assertEqual(options["database"], "analytics")
+
+    def test_mandb_alias_uses_same_command(self) -> None:
+        with patch("man_db.management.commands.man_db.perform_action") as perform_action:
+            call_command("mandb", "ping")
+
+        perform_action.assert_called_once()
+        action, *_ = perform_action.call_args.args
+        self.assertEqual(action, "ping")

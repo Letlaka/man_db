@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "tests.settings")
+
+import django
+from django.core.management.base import CommandError
+from django.test import SimpleTestCase
+
+django.setup()
+
+from man_db.db.actions import perform_action
+from man_db.db.settings import DatabaseConfig
+
+
+class DummyStyle:
+    @staticmethod
+    def SUCCESS(text: str) -> str:
+        return text
+
+
+class DummyStdout:
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def write(self, text: str) -> None:
+        self.messages.append(text)
+
+
+class ActionTests(SimpleTestCase):
+    def setUp(self) -> None:
+        self.stdout = DummyStdout()
+        self.style = DummyStyle()
+        self.database = DatabaseConfig(
+            alias="default",
+            engine="django.db.backends.postgresql",
+            name="app_db",
+            user="app_user",
+            password="secret",
+            host="db.example",
+            port=5432,
+        )
+
+    def test_drop_requires_confirmation(self) -> None:
+        with self.assertRaisesMessage(
+            CommandError,
+            "'drop' is destructive. Re-run with --yes to confirm.",
+        ):
+            perform_action("drop", {"yes": False}, self.stdout, self.style)
+
+    def test_ping_uses_requested_database_alias(self) -> None:
+        with patch("man_db.db.actions.server_ping", return_value=True) as server_ping:
+            perform_action("ping", {"database": "analytics"}, self.stdout, self.style)
+
+        server_ping.assert_called_once_with("analytics")
+        self.assertEqual(self.stdout.messages[-1], "PostgreSQL reachable.")
+
+    def test_reset_passes_force_flag_and_alias(self) -> None:
+        with patch(
+            "man_db.db.actions.delete_migrations_and_force_delete_db"
+        ) as delete_migrations:
+            perform_action(
+                "reset",
+                {"yes": True, "database": "analytics"},
+                self.stdout,
+                self.style,
+            )
+
+        delete_migrations.assert_called_once_with("analytics", force=True)
+        self.assertEqual(self.stdout.messages[-1], "Migrations cleared and database dropped.")
+
+    def test_restore_requires_acknowledgement(self) -> None:
+        with self.assertRaisesMessage(
+            CommandError,
+            "Refusing to run without --i-understand. This will DROP and recreate objects.",
+        ):
+            perform_action("restore", {"i_understand": False}, self.stdout, self.style)
+
+    def test_backup_keeps_dump_inside_requested_output_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch(
+                "man_db.db.actions.get_database_config",
+                return_value=self.database,
+            ), patch(
+                "man_db.db.actions.find_executable",
+                return_value="pg_dump",
+            ), patch("man_db.db.actions.run_subprocess") as run_subprocess:
+                perform_action(
+                    "backup",
+                    {
+                        "database": "default",
+                        "output_dir": temp_dir,
+                        "prefix": "nightly",
+                        "compression": 6,
+                        "include_owner": False,
+                    },
+                        self.stdout,
+                        self.style,
+                    )
+
+            run_subprocess.assert_called_once()
+            command = run_subprocess.call_args[0][0]
+            output_path = Path(command[command.index("-f") + 1])
+            self.assertTrue(output_path.is_relative_to(Path(temp_dir).resolve()))
+            self.assertTrue(output_path.name.startswith("nightly_"))
+            self.assertEqual(self.stdout.messages[-1], f"Backup complete: {output_path}")
+
+    def test_backup_rejects_prefix_that_escapes_output_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch(
+                "man_db.db.actions.get_database_config",
+                return_value=self.database,
+            ), patch("man_db.db.actions.find_executable") as find_executable, patch(
+                "man_db.db.actions.run_subprocess"
+            ) as run_subprocess:
+                with self.assertRaisesMessage(
+                    CommandError,
+                    "Backup prefix must be a simple filename component, not a path.",
+                ):
+                    perform_action(
+                        "backup",
+                        {
+                            "database": "default",
+                            "output_dir": temp_dir,
+                            "prefix": "../escape",
+                            "compression": 6,
+                            "include_owner": False,
+                        },
+                        self.stdout,
+                        self.style,
+                    )
+
+            find_executable.assert_not_called()
+            run_subprocess.assert_not_called()

@@ -166,7 +166,3 @@ This project is licensed under the MIT License (see `pyproject.toml`).
 ## Author
 
 Letlaka
-
----
-
-If you'd like, I can also add a short `USAGE.md` or expand the `pyproject.toml` metadata (authors, classifiers) and add a `CONTRIBUTING.md` template. Would you like that next?

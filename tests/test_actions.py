@@ -11,10 +11,10 @@ import django
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase
 
-django.setup()
-
 from man_db.db.actions import perform_action
 from man_db.db.settings import DatabaseConfig
+
+django.setup()
 
 
 class DummyStyle:
@@ -65,13 +65,54 @@ class ActionTests(SimpleTestCase):
         ) as delete_migrations:
             perform_action(
                 "reset",
-                {"yes": True, "database": "analytics"},
+                {"yes": True, "database": "analytics", "apps": ["man_db"]},
                 self.stdout,
                 self.style,
             )
 
-        delete_migrations.assert_called_once_with("analytics", force=True)
-        self.assertEqual(self.stdout.messages[-1], "Migrations cleared and database dropped.")
+        delete_migrations.assert_called_once_with(
+            "analytics",
+            force=True,
+            app_labels=["man_db"],
+        )
+        self.assertEqual(
+            self.stdout.messages[-1], "Migrations cleared and database dropped."
+        )
+
+    def test_reset_requires_explicit_app_scope(self) -> None:
+        with patch(
+            "man_db.db.actions.delete_migrations_and_force_delete_db"
+        ) as delete_migrations:
+            with self.assertRaisesMessage(
+                CommandError,
+                "'reset' requires --apps or MAN_DB_RESET_APP_ALLOWLIST to scope migration deletion.",
+            ):
+                perform_action(
+                    "reset",
+                    {"yes": True, "database": "analytics", "apps": []},
+                    self.stdout,
+                    self.style,
+                )
+
+        delete_migrations.assert_not_called()
+
+    def test_reset_uses_configured_app_allowlist(self) -> None:
+        with self.settings(MAN_DB_RESET_APP_ALLOWLIST=["man_db"]):
+            with patch(
+                "man_db.db.actions.delete_migrations_and_force_delete_db"
+            ) as delete_migrations:
+                perform_action(
+                    "reset",
+                    {"yes": True, "database": "analytics", "apps": []},
+                    self.stdout,
+                    self.style,
+                )
+
+        delete_migrations.assert_called_once_with(
+            "analytics",
+            force=True,
+            app_labels=["man_db"],
+        )
 
     def test_restore_requires_acknowledgement(self) -> None:
         with self.assertRaisesMessage(
@@ -80,15 +121,95 @@ class ActionTests(SimpleTestCase):
         ):
             perform_action("restore", {"i_understand": False}, self.stdout, self.style)
 
+    def test_restore_rejects_zero_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "app.dump"
+            archive_path.write_text("dump")
+
+            with (
+                patch(
+                    "man_db.db.actions.get_database_config",
+                    return_value=self.database,
+                ),
+                patch(
+                    "man_db.db.actions.os.cpu_count",
+                    return_value=4,
+                ),
+                patch("man_db.db.actions.find_executable") as find_executable,
+                patch("man_db.db.actions.run_subprocess") as run_subprocess,
+            ):
+                with self.assertRaisesMessage(
+                    CommandError,
+                    "Restore jobs must be between 1 and 4.",
+                ):
+                    perform_action(
+                        "restore",
+                        {
+                            "database": "default",
+                            "backup": str(archive_path),
+                            "jobs": 0,
+                            "create_db": False,
+                            "include_owner": False,
+                            "i_understand": True,
+                        },
+                        self.stdout,
+                        self.style,
+                    )
+
+            find_executable.assert_not_called()
+            run_subprocess.assert_not_called()
+
+    def test_restore_rejects_jobs_above_cpu_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "app.dump"
+            archive_path.write_text("dump")
+
+            with (
+                patch(
+                    "man_db.db.actions.get_database_config",
+                    return_value=self.database,
+                ),
+                patch(
+                    "man_db.db.actions.os.cpu_count",
+                    return_value=4,
+                ),
+                patch("man_db.db.actions.find_executable") as find_executable,
+                patch("man_db.db.actions.run_subprocess") as run_subprocess,
+            ):
+                with self.assertRaisesMessage(
+                    CommandError,
+                    "Restore jobs must be between 1 and 4.",
+                ):
+                    perform_action(
+                        "restore",
+                        {
+                            "database": "default",
+                            "backup": str(archive_path),
+                            "jobs": 5,
+                            "create_db": False,
+                            "include_owner": False,
+                            "i_understand": True,
+                        },
+                        self.stdout,
+                        self.style,
+                    )
+
+            find_executable.assert_not_called()
+            run_subprocess.assert_not_called()
+
     def test_backup_keeps_dump_inside_requested_output_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch(
-                "man_db.db.actions.get_database_config",
-                return_value=self.database,
-            ), patch(
-                "man_db.db.actions.find_executable",
-                return_value="pg_dump",
-            ), patch("man_db.db.actions.run_subprocess") as run_subprocess:
+            with (
+                patch(
+                    "man_db.db.actions.get_database_config",
+                    return_value=self.database,
+                ),
+                patch(
+                    "man_db.db.actions.find_executable",
+                    return_value="pg_dump",
+                ),
+                patch("man_db.db.actions.run_subprocess") as run_subprocess,
+            ):
                 perform_action(
                     "backup",
                     {
@@ -98,25 +219,29 @@ class ActionTests(SimpleTestCase):
                         "compression": 6,
                         "include_owner": False,
                     },
-                        self.stdout,
-                        self.style,
-                    )
+                    self.stdout,
+                    self.style,
+                )
 
             run_subprocess.assert_called_once()
             command = run_subprocess.call_args[0][0]
             output_path = Path(command[command.index("-f") + 1])
             self.assertTrue(output_path.is_relative_to(Path(temp_dir).resolve()))
             self.assertTrue(output_path.name.startswith("nightly_"))
-            self.assertEqual(self.stdout.messages[-1], f"Backup complete: {output_path}")
+            self.assertEqual(
+                self.stdout.messages[-1], f"Backup complete: {output_path}"
+            )
 
     def test_backup_rejects_prefix_that_escapes_output_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch(
-                "man_db.db.actions.get_database_config",
-                return_value=self.database,
-            ), patch("man_db.db.actions.find_executable") as find_executable, patch(
-                "man_db.db.actions.run_subprocess"
-            ) as run_subprocess:
+            with (
+                patch(
+                    "man_db.db.actions.get_database_config",
+                    return_value=self.database,
+                ),
+                patch("man_db.db.actions.find_executable") as find_executable,
+                patch("man_db.db.actions.run_subprocess") as run_subprocess,
+            ):
                 with self.assertRaisesMessage(
                     CommandError,
                     "Backup prefix must be a simple filename component, not a path.",

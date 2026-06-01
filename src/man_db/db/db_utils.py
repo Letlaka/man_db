@@ -43,14 +43,19 @@ def _connect_as_admin(
 
 def _database_exists(connection: psycopg.Connection, database_name: str) -> bool:
     with connection.cursor() as cursor:
-        cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s;", (database_name,))
+        cursor.execute(
+            "SELECT 1 FROM pg_database WHERE datname = %s;", (database_name,)
+        )
         return cursor.fetchone() is not None
 
 
 def server_ping(alias: str = "default") -> bool:
     config = get_database_config(alias)
     try:
-        with _connect_as_admin("postgres", config) as connection, connection.cursor() as cursor:
+        with (
+            _connect_as_admin("postgres", config) as connection,
+            connection.cursor() as cursor,
+        ):
             cursor.execute("SELECT 1;")
             cursor.fetchone()
     except psycopg.Error as error:
@@ -77,9 +82,7 @@ def server_ping(alias: str = "default") -> bool:
 def create_database(alias: str = "default") -> None:
     config = get_database_config(alias)
     if not config.name:
-        raise CommandError(
-            f"Database alias '{alias}' has an empty NAME setting."
-        )
+        raise CommandError(f"Database alias '{alias}' has an empty NAME setting.")
 
     try:
         with _connect_as_admin("postgres", config) as connection:
@@ -136,9 +139,7 @@ def _terminate_backends(connection: psycopg.Connection, database_name: str) -> N
 def force_delete_database(alias: str = "default") -> None:
     config = get_database_config(alias)
     if not config.name:
-        raise CommandError(
-            f"Database alias '{alias}' has an empty NAME setting."
-        )
+        raise CommandError(f"Database alias '{alias}' has an empty NAME setting.")
 
     dropped = False
     try:
@@ -200,17 +201,35 @@ def _find_project_root_candidate() -> Path:
     return Path.cwd()
 
 
-def _gather_app_dirs(root: Path) -> list[Path]:
+def _gather_app_dirs(root: Path, *, app_labels: list[str]) -> list[Path]:
     resolved_root = root.resolve()
-    app_dirs: set[Path] = set()
-    for app_config in django_apps.get_app_configs():
-        app_path = Path(app_config.path).resolve()
+    app_dirs: list[Path] = []
+    missing_labels: list[str] = []
+    for app_label in app_labels:
         try:
-            app_path.relative_to(resolved_root)
-        except ValueError:
+            app_config = django_apps.get_app_config(app_label)
+        except LookupError:
+            missing_labels.append(app_label)
             continue
-        if (app_path / "migrations").is_dir():
-            app_dirs.add(app_path)
+
+        app_path = Path(app_config.path).resolve()
+        if not app_path.is_relative_to(resolved_root):
+            raise CommandError(
+                f"App '{app_label}' is outside the project root and cannot be reset."
+            )
+
+        if not (app_path / "migrations").is_dir():
+            raise CommandError(
+                f"App '{app_label}' does not have a migrations directory."
+            )
+
+        if app_path not in app_dirs:
+            app_dirs.append(app_path)
+
+    if missing_labels:
+        labels = ", ".join(sorted(missing_labels))
+        raise CommandError(f"Unknown app labels for reset: {labels}.")
+
     return sorted(app_dirs)
 
 
@@ -224,21 +243,22 @@ def _remove_migration_files(migrations_path: Path) -> None:
 
 def _confirm_deletion_prompt(app_dirs: list[Path]) -> bool:
     listed_dirs = ", ".join(app_dir.name for app_dir in app_dirs)
-    confirm = input(
-        f"Type 'yes' to delete migration files for: {listed_dirs}: "
-    )
+    confirm = input(f"Type 'yes' to delete migration files for: {listed_dirs}: ")
     return confirm.strip().lower() == "yes"
 
 
-def _perform_deletion(project_root: Path, *, force: bool) -> bool:
-    app_dirs = _gather_app_dirs(project_root)
+def _perform_deletion(
+    project_root: Path, *, force: bool, app_labels: list[str]
+) -> bool:
+    app_dirs = _gather_app_dirs(project_root, app_labels=app_labels)
     if not app_dirs:
         log_event(
             logger,
             log_name=LogName.AUDIT,
             event_code=EventCode.AUDIT_CONFIG_CHANGED,
-            event="No local app migration directories found.",
+            event="No scoped app migration directories found.",
             project_root=str(project_root),
+            app_labels=app_labels,
         )
         return False
 
@@ -269,8 +289,9 @@ def delete_migrations_and_force_delete_db(
     alias: str = "default",
     *,
     force: bool = False,
+    app_labels: list[str],
 ) -> None:
     project_root = Path(getattr(settings, "BASE_DIR", _find_project_root_candidate()))
-    deleted = _perform_deletion(project_root, force=force)
+    deleted = _perform_deletion(project_root, force=force, app_labels=app_labels)
     if deleted:
         force_delete_database(alias)

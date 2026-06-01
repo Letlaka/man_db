@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import os
 import shlex
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
+from django.conf import settings
 from django.core.management.base import CommandError
 
 from man_db.db.backup_utils import (
@@ -25,14 +27,11 @@ from man_db.db.settings import get_database_config
 from man_db.event_codes import EventCode, LogName
 from man_db.logging_utils import get_logger, log_event
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
 logger = get_logger(__name__)
 
 
 class StyleProtocol(Protocol):
-    SUCCESS: Callable[[str], str]
+    def SUCCESS(self, text: str) -> str: ...
 
 
 class StdoutProtocol(Protocol):
@@ -53,7 +52,17 @@ def _compression_level(options: Options) -> int:
     return level
 
 
-def _handle_create(options: Options, stdout: StdoutProtocol, style: StyleProtocol) -> None:
+def _restore_jobs(options: Options) -> int:
+    jobs = int(options["jobs"])
+    max_jobs = max(1, os.cpu_count() or 1)
+    if not 1 <= jobs <= max_jobs:
+        raise CommandError(f"Restore jobs must be between 1 and {max_jobs}.")
+    return jobs
+
+
+def _handle_create(
+    options: Options, stdout: StdoutProtocol, style: StyleProtocol
+) -> None:
     alias = _database_alias(options)
     log_event(
         logger,
@@ -66,7 +75,9 @@ def _handle_create(options: Options, stdout: StdoutProtocol, style: StyleProtoco
     stdout.write(style.SUCCESS("Database creation complete."))
 
 
-def _handle_drop(options: Options, stdout: StdoutProtocol, style: StyleProtocol) -> None:
+def _handle_drop(
+    options: Options, stdout: StdoutProtocol, style: StyleProtocol
+) -> None:
     if not options["yes"]:
         raise CommandError("'drop' is destructive. Re-run with --yes to confirm.")
 
@@ -75,29 +86,53 @@ def _handle_drop(options: Options, stdout: StdoutProtocol, style: StyleProtocol)
     stdout.write(style.SUCCESS("Database dropped."))
 
 
-def _handle_reset(options: Options, stdout: StdoutProtocol, style: StyleProtocol) -> None:
+def _reset_app_labels(options: Options) -> list[str]:
+    selected_apps = [str(app) for app in options.get("apps") or []]
+    if selected_apps:
+        return selected_apps
+
+    configured_apps = getattr(settings, "MAN_DB_RESET_APP_ALLOWLIST", ())
+    if configured_apps:
+        return [str(app) for app in configured_apps]
+
+    raise CommandError(
+        "'reset' requires --apps or MAN_DB_RESET_APP_ALLOWLIST to scope migration deletion."
+    )
+
+
+def _handle_reset(
+    options: Options, stdout: StdoutProtocol, style: StyleProtocol
+) -> None:
     if not options["yes"]:
         raise CommandError("'reset' is destructive. Re-run with --yes to confirm.")
 
     alias = _database_alias(options)
-    delete_migrations_and_force_delete_db(alias, force=True)
+    delete_migrations_and_force_delete_db(
+        alias,
+        force=True,
+        app_labels=_reset_app_labels(options),
+    )
     stdout.write(style.SUCCESS("Migrations cleared and database dropped."))
 
 
-def _handle_ping(options: Options, stdout: StdoutProtocol, style: StyleProtocol) -> None:
+def _handle_ping(
+    options: Options, stdout: StdoutProtocol, style: StyleProtocol
+) -> None:
     alias = _database_alias(options)
     if not server_ping(alias):
-        raise CommandError("PostgreSQL not reachable. Check host, port, user, and password.")
+        raise CommandError(
+            "PostgreSQL not reachable. Check host, port, user, and password."
+        )
     stdout.write(style.SUCCESS("PostgreSQL reachable."))
 
 
-def _handle_backup(options: Options, stdout: StdoutProtocol, style: StyleProtocol) -> None:
+def _handle_backup(
+    options: Options, stdout: StdoutProtocol, style: StyleProtocol
+) -> None:
     alias = _database_alias(options)
     db = get_database_config(alias)
     if not db.name:
-        raise CommandError(
-            f"Database alias '{alias}' has an empty NAME setting."
-        )
+        raise CommandError(f"Database alias '{alias}' has an empty NAME setting.")
 
     output_dir = Path(str(options["output_dir"])).expanduser().resolve()
     filename_prefix = str(options["prefix"])
@@ -111,7 +146,9 @@ def _handle_backup(options: Options, stdout: StdoutProtocol, style: StyleProtoco
     )
     backup_path = (output_dir / backup_name).resolve()
     if not backup_path.is_relative_to(output_dir):
-        raise CommandError("Backup path must stay within the requested output directory.")
+        raise CommandError(
+            "Backup path must stay within the requested output directory."
+        )
 
     pg_dump_executable = find_executable("PG_DUMP_PATH", "pg_dump")
     ensure_directory(backup_path)
@@ -143,7 +180,9 @@ def _handle_backup(options: Options, stdout: StdoutProtocol, style: StyleProtoco
     stdout.write(style.SUCCESS(f"Backup complete: {backup_path}"))
 
 
-def _handle_restore(options: Options, stdout: StdoutProtocol, style: StyleProtocol) -> None:
+def _handle_restore(
+    options: Options, stdout: StdoutProtocol, style: StyleProtocol
+) -> None:
     if not options["i_understand"]:
         raise CommandError(
             "Refusing to run without --i-understand. This will DROP and recreate objects."
@@ -156,9 +195,9 @@ def _handle_restore(options: Options, stdout: StdoutProtocol, style: StyleProtoc
         raise CommandError(f"Backup file not found: {archive_path}")
 
     if not db.name and not bool(options["create_db"]):
-        raise CommandError(
-            f"Database alias '{alias}' has an empty NAME setting."
-        )
+        raise CommandError(f"Database alias '{alias}' has an empty NAME setting.")
+
+    parallel_jobs = _restore_jobs(options)
 
     env = os.environ.copy()
     if db.password:
@@ -170,7 +209,7 @@ def _handle_restore(options: Options, stdout: StdoutProtocol, style: StyleProtoc
         db=db,
         archive_file=archive_path,
         create_database_first=bool(options["create_db"]),
-        parallel_jobs=int(options["jobs"]),
+        parallel_jobs=parallel_jobs,
         include_owner_and_privileges=bool(options["include_owner"]),
     )
     command_line = " ".join(shlex.quote(part) for part in command)

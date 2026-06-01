@@ -45,3 +45,4 @@ staticfiles/
 .agents/
 .codex/
 security_best_practices_report.md
+threat_model.md

@@ -40,6 +40,11 @@ class Command(BaseCommand):
             help="confirm destructive actions (drop, reset)",
         )
         parser.add_argument(
+            "--apps",
+            nargs="+",
+            help="App labels whose migrations may be deleted during reset.",
+        )
+        parser.add_argument(
             "--database",
             default="default",
             help="Django database alias to use.",

@@ -1,6 +1,7 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = [ "setuptools>=77.0.3", "wheel" ]
 build-backend = "setuptools.build_meta"
+
 
 [project]
 name = "man-db"
@@ -8,17 +9,62 @@ version = "0.1.0"
 description = "Reusable Django management command for PostgreSQL lifecycle, backup, and restore tasks."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
-authors = [{ name = "Letlaka" }]
-dependencies = [
-    "Django>=5.2,<6.0",
-    "psycopg[binary]>=3.3",
-    "structlog>=25.0",
+license = "MIT"
+license-files = [ "LICENSE" ]
+keywords = [
+"django",
+"postgresql",
+"management-command",
+"backup",
+"restore"
 ]
+classifiers = [
+"Development Status :: 3 - Alpha",
+"Framework :: Django",
+"Framework :: Django :: 5.2",
+"Intended Audience :: Developers",
+"Programming Language :: Python :: 3",
+"Programming Language :: Python :: 3.11",
+"Programming Language :: Python :: 3.12",
+"Programming Language :: Python :: 3.13",
+"Topic :: Database",
+"Topic :: Software Development :: Libraries :: Python Modules"
+]
+dependencies = [
+"Django>=5.2,<6.0",
+"psycopg[binary]>=3.3",
+"structlog>=25.0"
+]
+
+
+[[project.authors]]
+name = "Letlaka"
+
+
+[dependency-groups]
+dev = [ "django-stubs[compatible-mypy]>=6.0.5" ]
+
+
+[tool.mypy]
+files = [ "src", "tests" ]
+plugins = [ "mypy_django_plugin.main" ]
+
+
+[tool.django-stubs]
+django_settings_module = "tests.settings"
+
 
 [tool.setuptools]
 include-package-data = true
-package-dir = { "" = "src" }
+
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+
+[tool.setuptools.package-data]
+man_db = [ "py.typed" ]
+
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = [ "src" ]

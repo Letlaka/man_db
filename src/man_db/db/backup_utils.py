@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
+from django.conf import settings
 from django.core.management.base import CommandError
 from django.utils import timezone
 
@@ -14,6 +15,15 @@ from man_db.event_codes import EventCode, LogName
 from man_db.logging_utils import get_logger, log_event
 
 logger = get_logger(__name__)
+
+DEFAULT_TRUSTED_EXECUTABLE_DIRS = (
+    Path("/usr/bin"),
+    Path("/usr/local/bin"),
+    Path("/bin"),
+    Path("/usr/sbin"),
+    Path("/sbin"),
+    Path("/usr/lib/postgresql"),
+)
 
 
 def ensure_directory(path: Path) -> None:
@@ -27,20 +37,47 @@ def ensure_directory(path: Path) -> None:
     )
 
 
+def _is_executable_file(path: Path) -> bool:
+    return path.is_file() and os.access(path, os.X_OK)
+
+
+def _trusted_executable_dirs() -> tuple[Path, ...]:
+    configured_dirs = getattr(settings, "MAN_DB_TRUSTED_EXECUTABLE_DIRS", None)
+    if configured_dirs is None:
+        return DEFAULT_TRUSTED_EXECUTABLE_DIRS
+    return tuple(
+        Path(directory).expanduser().resolve() for directory in configured_dirs
+    )
+
+
+def _path_is_trusted(path: Path) -> bool:
+    resolved_path = path.resolve()
+    return any(
+        resolved_path.is_relative_to(directory)
+        for directory in _trusted_executable_dirs()
+    )
+
+
 def find_executable(preferred_env_var: str, fallback_name: str) -> str:
     explicit_path = os.environ.get(preferred_env_var)
     if explicit_path:
-        executable = Path(explicit_path)
-        if executable.exists():
-            log_event(
-                logger,
-                log_name=LogName.AUDIT,
-                event_code=EventCode.AUDIT_CONFIG_CHANGED,
-                event="Using executable from environment.",
-                env_var=preferred_env_var,
-                path=str(executable),
-            )
-            return str(executable)
+        executable = Path(explicit_path).expanduser()
+        if not executable.is_absolute():
+            raise CommandError(f"{preferred_env_var} must be an absolute path.")
+
+        executable = executable.resolve()
+        if not _is_executable_file(executable):
+            raise CommandError(f"{preferred_env_var} must point to an executable file.")
+
+        log_event(
+            logger,
+            log_name=LogName.AUDIT,
+            event_code=EventCode.AUDIT_CONFIG_CHANGED,
+            event="Using executable from environment.",
+            env_var=preferred_env_var,
+            path=str(executable),
+        )
+        return str(executable)
 
     resolved = shutil.which(fallback_name)
     if not resolved:
@@ -49,14 +86,25 @@ def find_executable(preferred_env_var: str, fallback_name: str) -> str:
             f"{preferred_env_var} to the full executable path."
         )
 
+    executable = Path(resolved).resolve()
+    if not _is_executable_file(executable):
+        raise CommandError(f"Resolved '{fallback_name}' is not an executable file.")
+
+    if not _path_is_trusted(executable):
+        raise CommandError(
+            f"Resolved '{fallback_name}' is outside trusted executable directories. "
+            f"Set {preferred_env_var} to an absolute trusted path or configure "
+            "MAN_DB_TRUSTED_EXECUTABLE_DIRS."
+        )
+
     log_event(
         logger,
         log_name=LogName.AUDIT,
         event_code=EventCode.AUDIT_CONFIG_CHANGED,
         event="Using executable from PATH.",
-        executable=resolved,
+        executable=str(executable),
     )
-    return resolved
+    return str(executable)
 
 
 def validate_filename_component(

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import stat
+import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "tests.settings")
 
@@ -14,6 +17,7 @@ django.setup()
 from man_db.db.backup_utils import (
     build_pg_dump_command,
     build_pg_restore_command,
+    find_executable,
     timestamped_filename,
 )
 from man_db.db.settings import DatabaseConfig
@@ -77,3 +81,83 @@ class BackupUtilsTests(SimpleTestCase):
             "Backup prefix must be a simple filename component, not a path.",
         ):
             timestamped_filename("app_db", "/tmp/nightly", "dump")
+
+    def test_find_executable_rejects_non_executable_env_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            executable = Path(temp_dir) / "pg_dump"
+            executable.write_text("#!/bin/sh\nexit 0\n")
+            executable.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+            with patch.dict(os.environ, {"PG_DUMP_PATH": str(executable)}, clear=False):
+                with self.assertRaisesMessage(
+                    CommandError,
+                    "PG_DUMP_PATH must point to an executable file.",
+                ):
+                    find_executable("PG_DUMP_PATH", "pg_dump")
+
+    def test_find_executable_rejects_relative_env_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_cwd = Path.cwd()
+            os.chdir(temp_dir)
+            try:
+                executable = Path("pg_dump")
+                executable.write_text("#!/bin/sh\nexit 0\n")
+                executable.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+
+                with patch.dict(os.environ, {"PG_DUMP_PATH": "pg_dump"}, clear=False):
+                    with self.assertRaisesMessage(
+                        CommandError,
+                        "PG_DUMP_PATH must be an absolute path.",
+                    ):
+                        find_executable("PG_DUMP_PATH", "pg_dump")
+            finally:
+                os.chdir(original_cwd)
+
+    def test_find_executable_accepts_absolute_executable_env_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            executable = Path(temp_dir) / "pg_dump"
+            executable.write_text("#!/bin/sh\nexit 0\n")
+            executable.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+
+            with patch.dict(os.environ, {"PG_DUMP_PATH": str(executable)}, clear=False):
+                resolved = find_executable("PG_DUMP_PATH", "pg_dump")
+
+        self.assertEqual(resolved, str(executable.resolve()))
+
+    def test_find_executable_rejects_path_result_outside_trusted_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            executable = Path(temp_dir) / "pg_dump"
+            executable.write_text("#!/bin/sh\nexit 0\n")
+            executable.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+
+            with self.settings(MAN_DB_TRUSTED_EXECUTABLE_DIRS=["/usr/bin"]):
+                with (
+                    patch.dict(os.environ, {}, clear=False),
+                    patch(
+                        "man_db.db.backup_utils.shutil.which",
+                        return_value=str(executable),
+                    ),
+                ):
+                    with self.assertRaisesMessage(
+                        CommandError,
+                        "Resolved 'pg_dump' is outside trusted executable directories.",
+                    ):
+                        find_executable("PG_DUMP_PATH", "pg_dump")
+
+    def test_find_executable_accepts_trusted_path_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            executable = Path(temp_dir) / "pg_dump"
+            executable.write_text("#!/bin/sh\nexit 0\n")
+            executable.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+
+            with self.settings(MAN_DB_TRUSTED_EXECUTABLE_DIRS=[temp_dir]):
+                with (
+                    patch.dict(os.environ, {}, clear=False),
+                    patch(
+                        "man_db.db.backup_utils.shutil.which",
+                        return_value=str(executable),
+                    ),
+                ):
+                    resolved = find_executable("PG_DUMP_PATH", "pg_dump")
+
+        self.assertEqual(resolved, str(executable.resolve()))

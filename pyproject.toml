@@ -41,6 +41,11 @@ dependencies = [
 name = "Letlaka"
 
 
+[project.urls]
+Homepage = "https://github.com/Letlaka/man_db"
+Issues = "https://github.com/Letlaka/man_db/issues"
+
+
 [dependency-groups]
 dev = [ "django-stubs[compatible-mypy]>=6.0.5" ]
 

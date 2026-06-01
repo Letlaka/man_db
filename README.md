@@ -51,27 +51,6 @@ INSTALLED_APPS = [
 
 Ensure the `DATABASES[...]` entry you intend to manage uses the Postgres backend (`django.db.backends.postgresql`). The management commands read connection details from `settings.DATABASES`.
 
-## Publishing to PyPI
-
-For app-to-app reuse, publish `man_db` as a normal wheel/sdist to PyPI instead of installing it from a Git URL. Consumers can then install it with `uv add man-db` or `pip install man-db` and no GitHub token is required.
-
-This repository includes [.github/workflows/publish.yml](.github/workflows/publish.yml), which builds the package on tag pushes matching `v*` and publishes it to PyPI with Trusted Publishing.
-
-One-time setup:
-
-1. Create the PyPI project or register a pending Trusted Publisher for `man-db`.
-2. In PyPI, configure the GitHub publisher for `Letlaka/man_db`, workflow `.github/workflows/publish.yml`, and environment `pypi`.
-3. In GitHub, create an environment named `pypi` and optionally require manual approval for releases.
-
-Release flow:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-PyPI itself does not support private packages. If the distribution must remain private, use a private package index instead of `pypi.org`.
-
 ## Environment variables
 
 - `PG_DUMP_PATH` — optional absolute path to the `pg_dump` executable. If unset, the command will look for `pg_dump` on `PATH`, but only from trusted executable directories.
@@ -98,63 +77,63 @@ Common examples:
 ```bash
 # create the database
 python manage.py man_db create
-  ## Specifying the database name
+```
 
-  The management commands read database connection information from your Django project's `settings.DATABASES`. The important field for create/backup/restore actions is the `NAME` value under the database alias.
+## Specifying the database name
 
-  Example `settings.py` (using environment variables is recommended for secrets):
+The management commands read database connection information from your Django project's `settings.DATABASES`. The important field for create, backup, and restore actions is the `NAME` value under the selected database alias.
 
-  ```py
-  import os
+Example `settings.py` (using environment variables is recommended for secrets):
 
-  DATABASES = {
-   "default": {
+```py
+import os
+
+DATABASES = {
+  "default": {
     "ENGINE": "django.db.backends.postgresql",
     "NAME": os.environ.get("DB_NAME", "my_database_name"),
     "USER": os.environ.get("DB_USER", "app_user"),
     "PASSWORD": os.environ.get("DB_PASSWORD", "secret"),
     "HOST": os.environ.get("DB_HOST", "db.example"),
     "PORT": int(os.environ.get("DB_PORT", 5432)),
-   },
-   "analytics": {
+  },
+  "analytics": {
     "ENGINE": "django.db.backends.postgresql",
     "NAME": "analytics_db",
     "USER": "analytics_user",
     "PASSWORD": "secret",
     "HOST": "db.example",
     "PORT": 5432,
-   },
-  }
-  ```
+  },
+}
+```
 
-  How the commands select the database:
+How the commands select the database:
 
-- Use the `--database` option to select a Django database *alias* (default: `default`). The command reads the `NAME` from that alias.
-- Example: `python manage.py man_db create --database analytics` will attempt to create the database named by `DATABASES['analytics']['NAME']`.
+- Use the `--database` option to select a Django database alias (default: `default`). The command reads the `NAME` from that alias.
+- Example: `python manage.py man_db create --database analytics` will attempt to create the database named by `DATABASES["analytics"]["NAME"]`.
 
-  Important notes:
+Important notes:
 
-- The `create` action requires a non-empty `NAME`. If `DATABASES[alias]['NAME']` is empty the command will raise a `CommandError` and refuse to proceed.
+- The `create` action requires a non-empty `NAME`. If `DATABASES[alias]["NAME"]` is empty, the command raises a `CommandError` and refuses to proceed.
 - For `restore`, you may use `--create-db` to tell `pg_restore` to create the database from the archive; when `--create-db` is used the command allows an empty `NAME` because the archive can provide the database name.
 - Keep credentials out of source by using `os.environ.get(...)` or a secrets manager in your `settings.py`.
 
-## check connectivity for a named DB alias
+More examples:
 
+```bash
+# check connectivity for a named DB alias
 python manage.py man_db ping --database reporting
 
-## create a backup (output dir, optional prefix)
-
+# create a backup (output dir, optional prefix)
 python manage.py man_db backup --output-dir ./backups --prefix nightly
 
-## restore from backup (destructive)
-
+# restore from backup (destructive)
 python manage.py man_db restore --backup ./backups/app_20260516_20260516_010203.dump --i-understand
 
-## reset scoped app migrations and drop DB (destructive, must pass --yes)
-
+# reset scoped app migrations and drop DB (destructive, must pass --yes)
 python manage.py man_db reset --yes --apps my_app another_app
-
-```python
+```
 
 ### Important flags
 

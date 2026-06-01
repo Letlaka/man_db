@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: testpypi
-      url: https://test.pypi.org/project/man-db/
+      url: https://test.pypi.org/project/django-postgres-man-db/
     permissions:
       id-token: write
     steps:
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/man-db/
+      url: https://pypi.org/project/django-postgres-man-db/
     permissions:
       id-token: write
     steps:

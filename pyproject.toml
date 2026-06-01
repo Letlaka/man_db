@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 
 [project]
-name = "man-db"
+name = "django-postgres-man-db"
 version = "0.1.0"
 description = "Reusable Django management command for PostgreSQL lifecycle, backup, and restore tasks."
 readme = "README.md"

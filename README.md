@@ -1,4 +1,4 @@
-# man-db
+# django-postgres-man-db
 
 `man_db` is a small, reusable Django app that provides management commands to manage PostgreSQL databases and backups. It is intended to be dropped into Django projects that use Postgres.
 
@@ -26,9 +26,9 @@ See `pyproject.toml` for package metadata and declared dependencies.
 For Django projects that consume a published release, install from PyPI:
 
 ```bash
-uv add man-db
+uv add django-postgres-man-db
 # or
-pip install man-db
+pip install django-postgres-man-db
 ```
 
 For local development from this repository, use an editable install:

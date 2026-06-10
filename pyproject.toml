@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "django-postgres-man-db"
-version = "0.1.1"
+version = "0.1.2"
 description = "Reusable Django management command for PostgreSQL lifecycle, backup, and restore tasks."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,7 +21,6 @@ keywords = [
 classifiers = [
 "Development Status :: 3 - Alpha",
 "Framework :: Django",
-"Framework :: Django :: 5.2",
 "Intended Audience :: Developers",
 "Programming Language :: Python :: 3",
 "Programming Language :: Python :: 3.11",
@@ -31,7 +30,7 @@ classifiers = [
 "Topic :: Software Development :: Libraries :: Python Modules"
 ]
 dependencies = [
-"Django>=5.2,<6.0",
+"Django>=5.2",
 "psycopg[binary]>=3.3",
 "structlog>=25.0"
 ]

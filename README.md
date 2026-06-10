@@ -15,7 +15,7 @@
 ## Requirements
 
 - Python >= 3.11
-- Django >= 5.2
+- Django 5.2 and later
 - `psycopg[binary]` and `structlog` (declared in `pyproject.toml`)
 - `pg_dump` and `pg_restore` binaries available on `PATH` (or provided via env vars)
 

@@ -8,6 +8,8 @@ All notable changes to this project will be documented in this file.
 
 - `CHANGELOG.md`
 - `pytest` and `pytest-django` in development dependencies and package extras
+- Local Docker Compose integration testing for PostgreSQL 14, 15, 16, 17, and 18 with matching `pg_dump` and `pg_restore` clients
+- Integration assertions that verify the configured PostgreSQL server and client major versions
 - A real PostgreSQL integration test suite for create, ping, backup, and restore flows
 
 ### Changed
@@ -15,6 +17,7 @@ All notable changes to this project will be documented in this file.
 - Package metadata now reports version `0.1.3`
 - Supported Python versions are documented as 3.13
 - Local development instructions now install the dev extra
+- GitHub Actions now runs the integration suite against PostgreSQL 14 through 18 instead of a single PostgreSQL version
 
 ### Fixed
 

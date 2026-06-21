@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -9,6 +11,7 @@ import pytest
 from django.test import SimpleTestCase, override_settings
 
 from man_db.db.actions import perform_action
+from man_db.db.backup_utils import find_executable
 from man_db.db.db_utils import create_database, force_delete_database
 
 pytestmark = pytest.mark.integration
@@ -81,6 +84,40 @@ class IntegrationTests(SimpleTestCase):
         from man_db.db.db_utils import server_ping
 
         self.assertTrue(server_ping("default"))
+
+    def test_expected_server_and_client_major_versions(self) -> None:
+        expected_value = os.environ.get("POSTGRES_VERSION")
+        if expected_value is None:
+            self.skipTest("POSTGRES_VERSION is only required for version-matrix runs.")
+        expected_major = int(expected_value)
+
+        create_database("default")
+        with self._connect_to_managed_database() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SHOW server_version_num;")
+                row = cursor.fetchone()
+
+        if row is None:
+            self.fail("Expected PostgreSQL to return server_version_num.")
+        server_major = int(str(row[0])) // 10_000
+        self.assertEqual(server_major, expected_major)
+
+        executables = (
+            find_executable("PG_DUMP_PATH", "pg_dump"),
+            find_executable("PG_RESTORE_PATH", "pg_restore"),
+        )
+        for executable in executables:
+            with self.subTest(executable=executable):
+                result = subprocess.run(
+                    [executable, "--version"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                match = re.search(r"PostgreSQL\) (\d+)", result.stdout)
+                self.assertIsNotNone(match, result.stdout)
+                assert match is not None
+                self.assertEqual(int(match.group(1)), expected_major)
 
     def test_create_and_drop_database_roundtrip(self) -> None:
         create_database("default")

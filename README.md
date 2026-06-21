@@ -190,6 +190,18 @@ DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=test_user DB_PASSWORD=test_password \
 python -m pytest -q -m integration
 ```
 
+To test the complete supported PostgreSQL matrix with matching client tools, install Docker with Compose and run:
+
+```bash
+bash scripts/test-postgres-matrix.sh
+```
+
+The script tests PostgreSQL 14, 15, 16, 17, and 18 sequentially. To run only selected versions, pass them as arguments:
+
+```bash
+bash scripts/test-postgres-matrix.sh 17 18
+```
+
 ## Development and contributing
 
 - Fork and open a PR with a clear description of the change.

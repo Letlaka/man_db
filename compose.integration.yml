@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-18}
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_user -d postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  integration-tests:
+    build:
+      context: .
+      dockerfile: docker/integration/Dockerfile
+      args:
+        POSTGRES_VERSION: ${POSTGRES_VERSION:-18}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_VERSION: ${POSTGRES_VERSION:-18}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: test_user
+      DB_PASSWORD: test_password
+      PG_DUMP_PATH: /usr/lib/postgresql/${POSTGRES_VERSION:-18}/bin/pg_dump
+      PG_RESTORE_PATH: /usr/lib/postgresql/${POSTGRES_VERSION:-18}/bin/pg_restore
+      PGSSLMODE: disable
+

@@ -64,6 +64,20 @@ jobs:
           python-version: "3.13"
       - name: Install PostgreSQL client tools
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Detect PostgreSQL client executables
+        run: |
+          PG_DUMP_PATH="$(command -v pg_dump)"
+          PG_RESTORE_PATH="$(command -v pg_restore)"
+          if [ -z "$PG_DUMP_PATH" ] || [ ! -x "$PG_DUMP_PATH" ]; then
+            echo "pg_dump not found or not executable: $PG_DUMP_PATH"
+            exit 1
+          fi
+          if [ -z "$PG_RESTORE_PATH" ] || [ ! -x "$PG_RESTORE_PATH" ]; then
+            echo "pg_restore not found or not executable: $PG_RESTORE_PATH"
+            exit 1
+          fi
+          echo "PG_DUMP_PATH=$PG_DUMP_PATH" >> "$GITHUB_ENV"
+          echo "PG_RESTORE_PATH=$PG_RESTORE_PATH" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: python -m pip install -e ".[dev]"
       - name: Run integration tests
@@ -73,8 +87,6 @@ jobs:
           DB_PORT: 5432
           DB_USER: test_user
           DB_PASSWORD: test_password
-          PG_DUMP_PATH: /usr/lib/postgresql/17/bin/pg_dump
-          PG_RESTORE_PATH: /usr/lib/postgresql/17/bin/pg_restore
 
   build:
     name: Build distribution

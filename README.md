@@ -14,12 +14,18 @@
 
 ## Requirements
 
-- Python >= 3.11
+- Python >= 3.13
 - Django 5.2 and later
 - `psycopg[binary]` and `structlog` (declared in `pyproject.toml`)
 - `pg_dump` and `pg_restore` binaries available on `PATH` (or provided via env vars)
 
 See `pyproject.toml` for package metadata and declared dependencies.
+Current release: `0.1.3`.
+
+## Supported Python versions
+
+- Supported and tested in CI: Python 3.13
+- Local development target: Python 3.13 (see [`.python-version`](.python-version))
 
 ## Installation
 
@@ -36,7 +42,7 @@ For local development from this repository, use an editable install:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
+python -m pip install -e ".[dev]"
 ```
 
 Then add `man_db` to your Django `INSTALLED_APPS`.
@@ -55,7 +61,7 @@ Ensure the `DATABASES[...]` entry you intend to manage uses the Postgres backend
 
 - `PG_DUMP_PATH` — optional absolute path to the `pg_dump` executable. If unset, the command will look for `pg_dump` on `PATH`, but only from trusted executable directories.
 - `PG_RESTORE_PATH` — optional absolute path to the `pg_restore` executable. If unset, the command will look for `pg_restore` on `PATH`, but only from trusted executable directories.
-- `PGPASSWORD` — if your DB password is set in `DATABASES[...]`, the package will set `PGPASSWORD` in the subprocess environment for `pg_dump`/`pg_restore`.
+- `PGPASSFILE` — when your DB password is set in `DATABASES[...]`, the package writes a temporary `.pgpass` file and points `pg_dump` / `pg_restore` at it instead of exporting `PGPASSWORD`.
 - `SERVICE_NAME` / `ENVIRONMENT` — optional values used to bind contextvars for `structlog` (defaults: `man_db` / `local`).
 
 ## Optional Django settings
@@ -169,17 +175,30 @@ If you want to see or persist these structured logs, configure `structlog`/the s
 The repository includes unit tests that use Django's test framework. To run tests locally:
 
 ```bash
-python -m pip install -e .
+python -m pip install -e ".[dev]"
 python -m pytest -q
 ```
 
-Tests rely on `DJANGO_SETTINGS_MODULE` being set to `tests.settings`, which the test modules set by default.
+`pytest` is configured in `pyproject.toml` with `DJANGO_SETTINGS_MODULE = "tests.settings"`.
+
+Integration tests are available separately and require a reachable PostgreSQL instance plus client binaries:
+
+```bash
+PG_DUMP_PATH=/usr/lib/postgresql/17/bin/pg_dump \
+PG_RESTORE_PATH=/usr/lib/postgresql/17/bin/pg_restore \
+DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=test_user DB_PASSWORD=test_password \
+python -m pytest -q -m integration
+```
 
 ## Development and contributing
 
 - Fork and open a PR with a clear description of the change.
 - Keep changes focused and include tests for new behavior.
-- Run the test suite before submitting: `python -m pytest`.
+- Install dev dependencies and run the test suite before submitting: `python -m pip install -e ".[dev]" && python -m pytest`.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a history of notable changes.
 
 ## License
 

@@ -46,3 +46,4 @@ staticfiles/
 .codex/
 security_best_practices_report.md
 threat_model.md
+django-postgres-man-db-remediation-plan.md

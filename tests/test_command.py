@@ -1,15 +1,9 @@
 from __future__ import annotations
 
-import os
 from unittest.mock import patch
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "tests.settings")
-
-import django
 from django.core.management import call_command
 from django.test import SimpleTestCase
-
-django.setup()
 
 
 class CommandTests(SimpleTestCase):

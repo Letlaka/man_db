@@ -6,14 +6,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
-from django.conf import settings
 from django.core.management.base import CommandError
 
+from man_db.config import get_reset_app_allowlist
 from man_db.db.backup_utils import (
     build_pg_dump_command,
     build_pg_restore_command,
     ensure_directory,
     find_executable,
+    pgpass_env,
     run_subprocess,
     timestamped_filename,
 )
@@ -82,7 +83,14 @@ def _handle_drop(
         raise CommandError("'drop' is destructive. Re-run with --yes to confirm.")
 
     alias = _database_alias(options)
-    force_delete_database(alias)
+    log_event(
+        logger,
+        log_name=LogName.APPLICATION,
+        event_code=EventCode.APPLICATION_DB_DROP_REQUESTED,
+        event="Drop action requested.",
+        database_alias=alias,
+    )
+    force_delete_database(alias, confirmed=True)
     stdout.write(style.SUCCESS("Database dropped."))
 
 
@@ -91,9 +99,9 @@ def _reset_app_labels(options: Options) -> list[str]:
     if selected_apps:
         return selected_apps
 
-    configured_apps = getattr(settings, "MAN_DB_RESET_APP_ALLOWLIST", ())
+    configured_apps = get_reset_app_allowlist()
     if configured_apps:
-        return [str(app) for app in configured_apps]
+        return configured_apps
 
     raise CommandError(
         "'reset' requires --apps or MAN_DB_RESET_APP_ALLOWLIST to scope migration deletion."
@@ -110,6 +118,7 @@ def _handle_reset(
     delete_migrations_and_force_delete_db(
         alias,
         force=True,
+        confirmed=True,
         app_labels=_reset_app_labels(options),
     )
     stdout.write(style.SUCCESS("Migrations cleared and database dropped."))
@@ -153,10 +162,6 @@ def _handle_backup(
     pg_dump_executable = find_executable("PG_DUMP_PATH", "pg_dump")
     ensure_directory(backup_path)
 
-    env = os.environ.copy()
-    if db.password:
-        env["PGPASSWORD"] = db.password
-
     command = build_pg_dump_command(
         pg_dump_executable=pg_dump_executable,
         db=db,
@@ -170,13 +175,23 @@ def _handle_backup(
     log_event(
         logger,
         log_name=LogName.AUDIT,
-        event_code=EventCode.AUDIT_EXPORT_STARTED,
+        event_code=EventCode.AUDIT_BACKUP_STARTED,
         event="Running pg_dump.",
         database_alias=alias,
         database_name=db.name,
         backup_path=str(backup_path),
     )
-    run_subprocess(command, env)
+    with pgpass_env(db, os.environ.copy()) as env:
+        run_subprocess(command, env)
+    log_event(
+        logger,
+        log_name=LogName.AUDIT,
+        event_code=EventCode.AUDIT_BACKUP_COMPLETED,
+        event="pg_dump completed successfully.",
+        database_alias=alias,
+        database_name=db.name,
+        backup_path=str(backup_path),
+    )
     stdout.write(style.SUCCESS(f"Backup complete: {backup_path}"))
 
 
@@ -190,7 +205,10 @@ def _handle_restore(
 
     alias = _database_alias(options)
     db = get_database_config(alias)
-    archive_path = Path(str(options.get("backup") or "")).expanduser().resolve()
+    backup_value = options.get("backup") or ""
+    if not backup_value:
+        raise CommandError("--backup is required for the restore action.")
+    archive_path = Path(str(backup_value)).expanduser().resolve()
     if not archive_path.exists():
         raise CommandError(f"Backup file not found: {archive_path}")
 
@@ -198,10 +216,6 @@ def _handle_restore(
         raise CommandError(f"Database alias '{alias}' has an empty NAME setting.")
 
     parallel_jobs = _restore_jobs(options)
-
-    env = os.environ.copy()
-    if db.password:
-        env["PGPASSWORD"] = db.password
 
     pg_restore_executable = find_executable("PG_RESTORE_PATH", "pg_restore")
     command = build_pg_restore_command(
@@ -218,12 +232,21 @@ def _handle_restore(
     log_event(
         logger,
         log_name=LogName.AUDIT,
-        event_code=EventCode.AUDIT_EXPORT_STARTED,
+        event_code=EventCode.AUDIT_RESTORE_STARTED,
         event="Running pg_restore.",
         database_alias=alias,
         archive_path=str(archive_path),
     )
-    run_subprocess(command, env)
+    with pgpass_env(db, os.environ.copy()) as env:
+        run_subprocess(command, env)
+    log_event(
+        logger,
+        log_name=LogName.AUDIT,
+        event_code=EventCode.AUDIT_RESTORE_COMPLETED,
+        event="pg_restore completed successfully.",
+        database_alias=alias,
+        archive_path=str(archive_path),
+    )
     stdout.write(style.SUCCESS("Restore complete."))
 
 

@@ -5,16 +5,11 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "tests.settings")
-
-import django
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase
 
 from man_db.db.actions import perform_action
 from man_db.db.settings import DatabaseConfig
-
-django.setup()
 
 
 class DummyStyle:
@@ -73,6 +68,7 @@ class ActionTests(SimpleTestCase):
         delete_migrations.assert_called_once_with(
             "analytics",
             force=True,
+            confirmed=True,
             app_labels=["man_db"],
         )
         self.assertEqual(
@@ -111,8 +107,120 @@ class ActionTests(SimpleTestCase):
         delete_migrations.assert_called_once_with(
             "analytics",
             force=True,
+            confirmed=True,
             app_labels=["man_db"],
         )
+
+    def test_drop_passes_confirmed_flag_to_force_delete_database(self) -> None:
+        with patch("man_db.db.actions.force_delete_database") as force_delete_database:
+            perform_action("drop", {"yes": True}, self.stdout, self.style)
+
+        force_delete_database.assert_called_once_with("default", confirmed=True)
+        self.assertEqual(self.stdout.messages[-1], "Database dropped.")
+
+    def test_backup_uses_pgpassfile_instead_of_pgpassword(self) -> None:
+        captured_env: dict[str, str] = {}
+        captured_content = ""
+        pgpass_path: Path | None = None
+
+        def fake_run_subprocess(command: list[str], env: dict[str, str]) -> None:
+            nonlocal captured_content, pgpass_path
+            captured_env.update(env)
+            pgpass_path = Path(env["PGPASSFILE"])
+            captured_content = pgpass_path.read_text(encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch(
+                    "man_db.db.actions.get_database_config",
+                    return_value=self.database,
+                ),
+                patch(
+                    "man_db.db.actions.find_executable",
+                    return_value="pg_dump",
+                ),
+                patch(
+                    "man_db.db.actions.run_subprocess",
+                    side_effect=fake_run_subprocess,
+                ),
+                patch.dict(os.environ, {"PGPASSWORD": "should-not-leak"}, clear=False),
+            ):
+                perform_action(
+                    "backup",
+                    {
+                        "database": "default",
+                        "output_dir": temp_dir,
+                        "prefix": "nightly",
+                        "compression": 6,
+                        "include_owner": False,
+                    },
+                    self.stdout,
+                    self.style,
+                )
+
+        self.assertIn("PGPASSFILE", captured_env)
+        self.assertNotIn("PGPASSWORD", captured_env)
+        self.assertEqual(
+            captured_content,
+            "db.example:5432:*:app_user:secret\n",
+        )
+        if pgpass_path is None:
+            self.fail("PGPASSFILE path was not captured.")
+        self.assertFalse(pgpass_path.exists())
+
+    def test_restore_uses_pgpassfile_instead_of_pgpassword(self) -> None:
+        captured_env: dict[str, str] = {}
+        captured_content = ""
+        pgpass_path: Path | None = None
+
+        def fake_run_subprocess(command: list[str], env: dict[str, str]) -> None:
+            nonlocal captured_content, pgpass_path
+            captured_env.update(env)
+            pgpass_path = Path(env["PGPASSFILE"])
+            captured_content = pgpass_path.read_text(encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "app.dump"
+            archive_path.write_text("dump")
+
+            with (
+                patch(
+                    "man_db.db.actions.get_database_config",
+                    return_value=self.database,
+                ),
+                patch(
+                    "man_db.db.actions.find_executable",
+                    return_value="pg_restore",
+                ),
+                patch(
+                    "man_db.db.actions.run_subprocess",
+                    side_effect=fake_run_subprocess,
+                ),
+                patch.dict(os.environ, {"PGPASSWORD": "should-not-leak"}, clear=False),
+            ):
+                perform_action(
+                    "restore",
+                    {
+                        "database": "default",
+                        "backup": str(archive_path),
+                        "jobs": 1,
+                        "create_db": False,
+                        "include_owner": False,
+                        "i_understand": True,
+                    },
+                    self.stdout,
+                    self.style,
+                )
+
+        self.assertIn("PGPASSFILE", captured_env)
+        self.assertNotIn("PGPASSWORD", captured_env)
+        self.assertEqual(
+            captured_content,
+            "db.example:5432:*:app_user:secret\n",
+        )
+        if pgpass_path is None:
+            self.fail("PGPASSFILE path was not captured.")
+        self.assertFalse(pgpass_path.exists())
 
     def test_restore_requires_acknowledgement(self) -> None:
         with self.assertRaisesMessage(
@@ -120,6 +228,18 @@ class ActionTests(SimpleTestCase):
             "Refusing to run without --i-understand. This will DROP and recreate objects.",
         ):
             perform_action("restore", {"i_understand": False}, self.stdout, self.style)
+
+    def test_restore_requires_backup_argument(self) -> None:
+        with self.assertRaisesMessage(
+            CommandError,
+            "--backup is required for the restore action.",
+        ):
+            perform_action(
+                "restore",
+                {"i_understand": True, "backup": ""},
+                self.stdout,
+                self.style,
+            )
 
     def test_restore_rejects_zero_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

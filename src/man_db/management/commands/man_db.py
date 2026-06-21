@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import contextlib
 import uuid
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import structlog
-from django.conf import settings
 from django.core.management.base import BaseCommand
 
+from man_db.config import get_backup_output_dir
 from man_db.db.actions import perform_action
 
 if TYPE_CHECKING:
@@ -51,7 +50,7 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--output-dir",
-            default=str(Path(getattr(settings, "BASE_DIR", Path.cwd())) / "backups"),
+            default=str(get_backup_output_dir()),
             help="Directory to write the backup file.",
         )
         parser.add_argument(

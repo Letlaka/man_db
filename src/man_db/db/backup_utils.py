@@ -1,28 +1,51 @@
 from __future__ import annotations
 
+import contextlib
 import os
+import platform
 import shlex
 import shutil
+import stat
 import subprocess
+import tempfile
+from collections.abc import Generator
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from django.conf import settings
 from django.core.management.base import CommandError
 from django.utils import timezone
 
+from man_db.config import get_trusted_executable_dirs
 from man_db.db.settings import DatabaseConfig
 from man_db.event_codes import EventCode, LogName
 from man_db.logging_utils import get_logger, log_event
 
 logger = get_logger(__name__)
 
-DEFAULT_TRUSTED_EXECUTABLE_DIRS = (
+_UNIX_TRUSTED_EXECUTABLE_DIRS: tuple[Path, ...] = (
     Path("/usr/bin"),
     Path("/usr/local/bin"),
     Path("/bin"),
     Path("/usr/sbin"),
     Path("/sbin"),
     Path("/usr/lib/postgresql"),
+    Path("/usr/local/lib/postgresql"),
+    Path("/usr/share/postgresql-common"),
+    Path("/opt/homebrew/bin"),
+    Path("/usr/local/Cellar"),
+    Path("/opt/local/bin"),
+)
+
+_WINDOWS_TRUSTED_EXECUTABLE_DIRS: tuple[Path, ...] = (
+    Path(os.environ.get("ProgramFiles", r"C:\Program Files")),
+    Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")),
+    Path(r"C:\Program Files\PostgreSQL"),
+    Path(r"C:\Program Files (x86)\PostgreSQL"),
+)
+
+DEFAULT_TRUSTED_EXECUTABLE_DIRS: tuple[Path, ...] = (
+    _WINDOWS_TRUSTED_EXECUTABLE_DIRS
+    if platform.system() == "Windows"
+    else _UNIX_TRUSTED_EXECUTABLE_DIRS
 )
 
 
@@ -31,23 +54,23 @@ def ensure_directory(path: Path) -> None:
     log_event(
         logger,
         log_name=LogName.SYSTEM,
-        event_code=EventCode.SYSTEM_STARTUP,
+        event_code=EventCode.SYSTEM_DIRECTORY_ENSURED,
         event="Ensured backup directory exists.",
         path=str(path.parent),
     )
 
 
 def _is_executable_file(path: Path) -> bool:
-    return path.is_file() and os.access(path, os.X_OK)
+    if not path.is_file():
+        return False
+    if platform.system() == "Windows":
+        pathext = os.environ.get("PATHEXT", ".EXE;.CMD;.BAT;.COM").upper().split(";")
+        return path.suffix.upper() in pathext
+    return os.access(path, os.X_OK)
 
 
 def _trusted_executable_dirs() -> tuple[Path, ...]:
-    configured_dirs = getattr(settings, "MAN_DB_TRUSTED_EXECUTABLE_DIRS", None)
-    if configured_dirs is None:
-        return DEFAULT_TRUSTED_EXECUTABLE_DIRS
-    return tuple(
-        Path(directory).expanduser().resolve() for directory in configured_dirs
-    )
+    return get_trusted_executable_dirs()
 
 
 def _path_is_trusted(path: Path) -> bool:
@@ -72,7 +95,7 @@ def find_executable(preferred_env_var: str, fallback_name: str) -> str:
         log_event(
             logger,
             log_name=LogName.AUDIT,
-            event_code=EventCode.AUDIT_CONFIG_CHANGED,
+            event_code=EventCode.AUDIT_EXECUTABLE_RESOLVED,
             event="Using executable from environment.",
             env_var=preferred_env_var,
             path=str(executable),
@@ -100,7 +123,7 @@ def find_executable(preferred_env_var: str, fallback_name: str) -> str:
     log_event(
         logger,
         log_name=LogName.AUDIT,
-        event_code=EventCode.AUDIT_CONFIG_CHANGED,
+        event_code=EventCode.AUDIT_EXECUTABLE_RESOLVED,
         event="Using executable from PATH.",
         executable=str(executable),
     )
@@ -130,14 +153,10 @@ def validate_filename_component(
 
 def timestamped_filename(database_name: str, prefix: str, extension: str) -> str:
     stamp = timezone.now().strftime("%Y%m%d_%H%M%S")
-    base = validate_filename_component(
-        prefix,
-        label="Backup prefix",
-        allow_empty=True,
-    ) or validate_filename_component(
-        database_name,
-        label="Database name",
-    )
+    if prefix:
+        base = validate_filename_component(prefix, label="Backup prefix")
+    else:
+        base = validate_filename_component(database_name, label="Database name")
     return f"{base}_{stamp}.{extension.lstrip('.')}"
 
 
@@ -204,16 +223,33 @@ def build_pg_restore_command(
     return command
 
 
+@contextlib.contextmanager
+def pgpass_env(
+    db: DatabaseConfig,
+    base_env: dict[str, str],
+) -> Generator[dict[str, str], None, None]:
+    if not db.password:
+        yield base_env
+        return
+
+    content = f"{db.host}:{db.port}:*:{db.user}:{db.password}\n"
+    fd, path = tempfile.mkstemp(prefix=".pgpass_man_db_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as pgpass_file:
+            pgpass_file.write(content)
+        if platform.system() != "Windows":
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+
+        env = {**base_env, "PGPASSFILE": path}
+        env.pop("PGPASSWORD", None)
+        yield env
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(path)
+
+
 def run_subprocess(command: list[str], env: dict[str, str]) -> None:
     command_line = " ".join(shlex.quote(part) for part in command)
-    log_event(
-        logger,
-        log_name=LogName.AUDIT,
-        event_code=EventCode.AUDIT_EXPORT_STARTED,
-        event="Running subprocess.",
-        command=command,
-        command_line=command_line,
-    )
     try:
         subprocess.run(command, env=env, check=True)  # noqa: S603
     except subprocess.CalledProcessError as exc:
@@ -228,11 +264,3 @@ def run_subprocess(command: list[str], env: dict[str, str]) -> None:
         raise CommandError(
             f"Command failed with exit code {exc.returncode}: {command_line}"
         ) from exc
-
-    log_event(
-        logger,
-        log_name=LogName.AUDIT,
-        event_code=EventCode.AUDIT_EXPORT_COMPLETED,
-        event="Subprocess completed successfully.",
-        command_line=command_line,
-    )

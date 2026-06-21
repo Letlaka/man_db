@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from typing import IO
 
 import psycopg
 from django.apps import apps as django_apps
-from django.conf import settings
 from django.core.management.base import CommandError
 from psycopg import sql
 
+from man_db.config import get_base_dir
 from man_db.db.settings import DatabaseConfig, get_database_config
 from man_db.event_codes import EventCode, LogName
 from man_db.logging_utils import get_logger, log_event
@@ -22,7 +24,7 @@ def _connect_as_admin(
     log_event(
         logger,
         log_name=LogName.SYSTEM,
-        event_code=EventCode.SYSTEM_STARTUP,
+        event_code=EventCode.SYSTEM_CONNECTED,
         event="Connecting to PostgreSQL.",
         host=config.host,
         port=config.port,
@@ -72,7 +74,7 @@ def server_ping(alias: str = "default") -> bool:
     log_event(
         logger,
         log_name=LogName.SYSTEM,
-        event_code=EventCode.SYSTEM_STARTUP,
+        event_code=EventCode.SYSTEM_CONNECTED,
         event="PostgreSQL is reachable.",
         database_alias=alias,
     )
@@ -111,7 +113,9 @@ def create_database(alias: str = "default") -> None:
             database_name=config.name,
             error=str(error),
         )
-        raise
+        raise CommandError(
+            f"Failed to create database '{config.name}': {error}"
+        ) from error
 
     log_event(
         logger,
@@ -136,19 +140,28 @@ def _terminate_backends(connection: psycopg.Connection, database_name: str) -> N
         )
 
 
-def force_delete_database(alias: str = "default") -> None:
+def force_delete_database(
+    alias: str = "default",
+    *,
+    confirmed: bool = False,
+) -> None:
+    if not confirmed:
+        raise RuntimeError(
+            "force_delete_database() requires confirmed=True. "
+            "This operation is irreversible and cannot be undone."
+        )
+
     config = get_database_config(alias)
     if not config.name:
         raise CommandError(f"Database alias '{alias}' has an empty NAME setting.")
 
-    dropped = False
     try:
         with _connect_as_admin("postgres", config) as connection:
             if not _database_exists(connection, config.name):
                 log_event(
                     logger,
-                    log_name=LogName.AUDIT,
-                    event_code=EventCode.AUDIT_CONFIG_CHANGED,
+                    log_name=LogName.APPLICATION,
+                    event_code=EventCode.APPLICATION_DB_NOT_FOUND,
                     event="Database does not exist.",
                     database_alias=alias,
                     database_name=config.name,
@@ -162,14 +175,12 @@ def force_delete_database(alias: str = "default") -> None:
                             sql.Identifier(config.name)
                         )
                     )
-                dropped = True
             except psycopg.Error:
                 _terminate_backends(connection, config.name)
                 with connection.cursor() as cursor:
                     cursor.execute(
                         sql.SQL("DROP DATABASE {}").format(sql.Identifier(config.name))
                     )
-                dropped = True
     except psycopg.Error as error:
         log_event(
             logger,
@@ -180,25 +191,22 @@ def force_delete_database(alias: str = "default") -> None:
             database_name=config.name,
             error=str(error),
         )
-        raise
+        raise CommandError(
+            f"Failed to drop database '{config.name}': {error}"
+        ) from error
 
-    if dropped:
-        log_event(
-            logger,
-            log_name=LogName.AUDIT,
-            event_code=EventCode.AUDIT_CONFIG_CHANGED,
-            event="Database dropped.",
-            database_alias=alias,
-            database_name=config.name,
-        )
+    log_event(
+        logger,
+        log_name=LogName.APPLICATION,
+        event_code=EventCode.APPLICATION_DB_DROPPED,
+        event="Database dropped.",
+        database_alias=alias,
+        database_name=config.name,
+    )
 
 
-def _find_project_root_candidate() -> Path:
-    current = Path(__file__).resolve()
-    for parent in [current, *current.parents]:
-        if (parent / "manage.py").exists() or (parent / "settings.py").exists():
-            return parent
-    return Path.cwd()
+def _project_root() -> Path:
+    return get_base_dir()
 
 
 def _gather_app_dirs(root: Path, *, app_labels: list[str]) -> list[Path]:
@@ -241,57 +249,68 @@ def _remove_migration_files(migrations_path: Path) -> None:
         pyc_file.unlink(missing_ok=True)
 
 
-def _confirm_deletion_prompt(app_dirs: list[Path]) -> bool:
-    listed_dirs = ", ".join(app_dir.name for app_dir in app_dirs)
-    confirm = input(f"Type 'yes' to delete migration files for: {listed_dirs}: ")
-    return confirm.strip().lower() == "yes"
-
-
-def _perform_deletion(
-    project_root: Path, *, force: bool, app_labels: list[str]
+def _confirm_deletion_prompt(
+    app_dirs: list[Path],
+    *,
+    stdin: IO[str] | None = None,
+    stdout: IO[str] | None = None,
 ) -> bool:
-    app_dirs = _gather_app_dirs(project_root, app_labels=app_labels)
-    if not app_dirs:
-        log_event(
-            logger,
-            log_name=LogName.AUDIT,
-            event_code=EventCode.AUDIT_CONFIG_CHANGED,
-            event="No scoped app migration directories found.",
-            project_root=str(project_root),
-            app_labels=app_labels,
-        )
-        return False
+    listed_dirs = ", ".join(app_dir.name for app_dir in app_dirs)
+    out = stdout or sys.stdout
+    inp = stdin or sys.stdin
+    out.write(f"Type 'yes' to delete migration files for: {listed_dirs}: ")
+    out.flush()
+    return inp.readline().strip().lower() == "yes"
 
-    if not force and not _confirm_deletion_prompt(app_dirs):
-        log_event(
-            logger,
-            log_name=LogName.AUDIT,
-            event_code=EventCode.AUDIT_CONFIG_CHANGED,
-            event="Migration deletion aborted by user.",
-            project_root=str(project_root),
-        )
-        return False
 
+def _perform_deletion(app_dirs: list[Path]) -> None:
     for app_dir in app_dirs:
         _remove_migration_files(app_dir / "migrations")
 
     log_event(
         logger,
         log_name=LogName.AUDIT,
-        event_code=EventCode.AUDIT_CONFIG_CHANGED,
-        event="Migration files deleted.",
+        event_code=EventCode.AUDIT_MIGRATION_FILES_DELETED,
+        event="Migration files deleted after successful database drop.",
         app_dirs=[str(app_dir) for app_dir in app_dirs],
     )
-    return True
 
 
 def delete_migrations_and_force_delete_db(
     alias: str = "default",
     *,
     force: bool = False,
+    confirmed: bool = False,
     app_labels: list[str],
+    stdin: IO[str] | None = None,
+    stdout: IO[str] | None = None,
 ) -> None:
-    project_root = Path(getattr(settings, "BASE_DIR", _find_project_root_candidate()))
-    deleted = _perform_deletion(project_root, force=force, app_labels=app_labels)
-    if deleted:
-        force_delete_database(alias)
+    project_root = _project_root()
+    app_dirs = _gather_app_dirs(project_root, app_labels=app_labels)
+    if not app_dirs:
+        log_event(
+            logger,
+            log_name=LogName.AUDIT,
+            event_code=EventCode.AUDIT_MIGRATION_FILES_DELETED,
+            event="No scoped app migration directories found.",
+            project_root=str(project_root),
+            app_labels=app_labels,
+        )
+        return
+
+    if not force and not _confirm_deletion_prompt(
+        app_dirs,
+        stdin=stdin,
+        stdout=stdout,
+    ):
+        log_event(
+            logger,
+            log_name=LogName.AUDIT,
+            event_code=EventCode.AUDIT_MIGRATION_FILES_DELETED,
+            event="Migration deletion aborted by user.",
+            project_root=str(project_root),
+        )
+        return
+
+    force_delete_database(alias, confirmed=confirmed)
+    _perform_deletion(app_dirs)

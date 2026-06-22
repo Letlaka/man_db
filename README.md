@@ -57,6 +57,15 @@ INSTALLED_APPS = [
 
 Ensure the `DATABASES[...]` entry you intend to manage uses the Postgres backend (`django.db.backends.postgresql`). The management commands read connection details from `settings.DATABASES`.
 
+## CI and releases
+
+CI runs on pushes and pull requests. It validates the codebase, unit tests, and the PostgreSQL integration matrix.
+
+Release tags use the following flow:
+
+- `vX.Y.Z-rcN` publishes to TestPyPI
+- `vX.Y.Z` publishes to PyPI
+
 ## Environment variables
 
 - `PG_DUMP_PATH` — optional absolute path to the `pg_dump` executable. If unset, the command will look for `pg_dump` on `PATH`, but only from trusted executable directories.

@@ -1,6 +1,6 @@
 # django-postgres-man-db
 
-`man_db` is a small, reusable Django app that provides management commands to manage PostgreSQL databases and backups. It is intended to be dropped into Django projects that use Postgres.
+`man_db` is a reusable Django management command for PostgreSQL lifecycle, backup, and restore tasks. It is intended to be dropped into Django projects that use Postgres.
 
 ## Features
 

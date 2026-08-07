@@ -15,12 +15,12 @@
 ## Requirements
 
 - Python >= 3.13
-- Django 5.2 and later
+- Django 5.2.15 or later, below Django 6
 - `psycopg[binary]` and `structlog` (declared in `pyproject.toml`)
 - `pg_dump` and `pg_restore` binaries available on `PATH` (or provided via env vars)
 
 See `pyproject.toml` for package metadata and declared dependencies.
-Current release: `0.1.3`.
+Current release: `0.1.4`.
 
 ## Supported Python versions
 

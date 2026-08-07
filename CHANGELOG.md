@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4]
+
+### Changed
+
+- Require Django 5.2.15 or later within the Django 5.2 release series.
+- Test the minimum and latest supported Django 5.2 versions in CI and release workflows.
+
+### Security
+
+- Exclude Django versions affected by CVE-2026-7666 / GHSA-mm6v-q8q9-pgcf.
+
 ## [0.1.3]
 
 ### Added
